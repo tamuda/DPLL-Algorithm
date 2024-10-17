@@ -1,0 +1,232 @@
+#!/usr/bin/env python3
+
+import sys
+import argparse
+from copy import deepcopy
+
+def parse_input():
+    """
+    Parses the input, returns the clauses and variables.
+    
+    """
+    clauses = []
+    variables = set()
+    for line in sys.stdin:
+        clean_line = line.strip()
+        if not clean_line:
+            continue
+        literals = [literal.strip() for literal in clean_line.split(',')]
+        clause = set()
+        for literal in literals:
+            if literal.startswith('~'):
+                var = literal[1:]
+                clause.add('~' + var)
+                variables.add(var)
+            else:
+                var = literal
+                clause.add(var)
+                variables.add(var)
+        clauses.append(clause)
+    return clauses, list(variables)
+
+def negate_literal(literal):
+    """
+    Returns the negation of the given literal.
+    """
+    if literal.startswith('~'):
+        return literal[1:]
+    else:
+        return '~' + literal
+
+def simplify_clauses(clauses, var, value):
+    """
+    Simplifies the clauses based on the assignment of a variable.
+
+    This should return:
+        Simplified list of clauses.
+        None if a contradiction is detected.
+    """
+    new_clauses = []
+    var_true_literal = var if value else '~' + var
+    var_false_literal = '~' + var if value else var
+    for clause in clauses:
+        if var_true_literal in clause:
+            continue  # Clause is satisfied
+        new_clause = clause.copy()
+        if var_false_literal in new_clause:
+            new_clause.remove(var_false_literal)
+        if not new_clause:
+            return None  # Contradiction detected man
+        new_clauses.append(new_clause)
+    return new_clauses
+
+def unit_clause_heuristic(clauses, assignment):
+    """
+    Applies the unit clause heuristic to simplify clauses and update assignments.
+
+    Should rreturn:
+        (updated_clauses, updated_assignment)
+        Return (None, None) if a conflict is detected.
+    """
+    updated_clauses = clauses
+    updated_assignment = assignment.copy()
+    while True:
+        unit_clauses = [clause for clause in updated_clauses if len(clause) == 1]
+        if not unit_clauses:
+            break
+        unit_clause = unit_clauses[0]
+        unit_literal = next(iter(unit_clause))
+        if unit_literal.startswith('~'):
+            var = unit_literal[1:]
+            value = False
+        else:
+            var = unit_literal
+            value = True
+        if var in updated_assignment:
+            if updated_assignment[var] != value:
+                return None, None  # bro, conflict detected
+        else:
+            updated_assignment[var] = value
+        updated_clauses = simplify_clauses(updated_clauses, var, value)
+        if updated_clauses is None:
+            return None, None
+    return updated_clauses, updated_assignment
+
+def pure_literal_heuristic(clauses, assignment):
+    """
+    Applies the pure literal heuristic to simplify clauses and update assignments.
+
+    Return:
+        (updated_clauses, updated_assignment)
+        or (None, None) if a conflict is detected.
+    """
+    literals = set()
+    for clause in clauses:
+        for literal in clause:
+            literals.add(literal)
+    pure_literals = set()
+    for literal in literals:
+        if negate_literal(literal) not in literals:
+            pure_literals.add(literal)
+    if not pure_literals:
+        return clauses, assignment
+    updated_clauses = clauses
+    updated_assignment = assignment.copy()
+    for literal in pure_literals:
+        if literal.startswith('~'):
+            var = literal[1:]
+            value = False
+        else:
+            var = literal
+            value = True
+        if var in updated_assignment:
+            if updated_assignment[var] != value:
+                return None, None  # Hold on, conflict detected
+        else:
+            updated_assignment[var] = value
+        updated_clauses = simplify_clauses(updated_clauses, var, value)
+        if updated_clauses is None:
+            return None, None
+    return updated_clauses, updated_assignment
+
+def select_unassigned_variable(variables, assignment):
+    """
+    // Selects the next unassigned variable from the list of variables.
+    """
+    for var in variables:
+        if var not in assignment:
+            return var
+    return None
+
+def DPLL(clauses, variables, assignment, args):
+    """
+    Recursive implementation of the DPLL algorithm.
+    """
+    # Early termination here
+    if not clauses:
+        return assignment  # Satisfiable
+    if any(len(clause) == 0 for clause in clauses):
+        return None  # Unsatisfiable
+
+    # Apply heuristics
+    if not args.nounit:
+        result = unit_clause_heuristic(clauses, assignment)
+        if result is None:
+            return None
+        clauses, assignment = result
+        if not clauses:
+            return assignment  # Satisfiable
+        if any(len(clause) == 0 for clause in clauses):
+            return None  # Unsatisfiable
+
+    if not args.nopure:
+        result = pure_literal_heuristic(clauses, assignment)
+        if result is None:
+            return None
+        clauses, assignment = result
+        if not clauses:
+            return assignment  # Satisfiable
+        if any(len(clause) == 0 for clause in clauses):
+            return None  # Unsatisfiable
+
+    # Select next variable
+    var = select_unassigned_variable(variables, assignment)
+    if var is None:
+        # No unassigned variables left
+        return None  
+
+    # Try True
+    assignment[var] = True
+    simplified_clauses = simplify_clauses(clauses, var, True)
+    if simplified_clauses is not None:
+        result = DPLL(simplified_clauses, variables, assignment.copy(), args)
+        if result is not None:
+            return result
+
+    # Try False
+    assignment[var] = False
+    simplified_clauses = simplify_clauses(clauses, var, False)
+    if simplified_clauses is not None:
+        result = DPLL(simplified_clauses, variables, assignment.copy(), args)
+        if result is not None:
+            return result
+
+    return None
+
+def print_result(result, variables):
+    """
+    Prints the result in the required format.
+
+    If satisfiable:
+        satisfiable
+        variable assignments
+    If unsatisfiable:
+        unsatisfiable
+    """
+    if result:
+        print("satisfiable")
+        for var in sorted(variables):
+            value = result.get(var, False)
+            print(f"{var} = {'true' if value else 'false'}")
+    else:
+        print("unsatisfiable")
+
+def main():
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(description='SAT Solver using DPLL Algorithm.')
+    parser.add_argument('--nounit', action='store_true', help='Disable unit clause heuristic.')
+    parser.add_argument('--nopure', action='store_true', help='Disable pure literal heuristic.')
+    args = parser.parse_args()
+
+    # Parse input and initialize variables
+    clauses, variables = parse_input()
+    assignment = {}
+
+    # Run DPLL algorithm
+    result = DPLL(clauses, variables, assignment, args)
+
+    # Print result
+    print_result(result, variables)
+
+if __name__ == "__main__":
+    main()
